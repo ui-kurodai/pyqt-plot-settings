@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyqt-plot-settings"
+version = "0.1.0"
+description = "PyQt6 dialogs and data models for editing plot settings"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["PyQt6>=6.9.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

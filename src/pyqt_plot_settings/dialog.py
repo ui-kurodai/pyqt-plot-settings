@@ -1,0 +1,1170 @@
+from __future__ import annotations
+
+import copy
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPlainTextEdit,
+    QPushButton,
+    QRadioButton,
+    QSpinBox,
+    QStyledItemDelegate,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+@dataclass
+class SeriesPlotSettings:
+    label: str
+    color: str = "C0"
+    style: str = "*"
+    visible: bool = True
+    legend_visible: bool = True
+    legend_label: str = ""
+    legend_digits: int = -1
+    y_offset: float = 0.0
+
+
+@dataclass
+class ManualPlotItemSettings:
+    key: str
+    kind: str = "point"
+    values: str = ""
+
+
+@dataclass
+class AnnotationTextSettings:
+    key: str
+    name: str
+    visible: bool = True
+    text: str = ""
+    digit_count: int = -1
+    x: float = 0.02
+    y: float = 0.98
+    ha: str = "left"
+    va: str = "top"
+
+
+class OpaqueLineEditDelegate(QStyledItemDelegate):
+    def createEditor(self, parent: QWidget, option, index) -> QWidget:
+        editor = QLineEdit(parent)
+        editor.setAutoFillBackground(True)
+        editor.setFrame(True)
+        editor.setStyleSheet("QLineEdit { background: palette(base); color: palette(text); }")
+        return editor
+
+
+@dataclass
+class ExtraAxisPlotSettings:
+    key: str
+    name: str
+    visible: bool = True
+    label: str = ""
+    label_font_size: float = 10.0
+    tick_font_size: float = 10.0
+    axis_min: Optional[float] = None
+    axis_max: Optional[float] = None
+    log_scale: bool = False
+    digit_count: int = -1
+    scientific: bool = False
+    tick_count: int = 0
+    ticks_text: str = ""
+    opposite_ticks: bool = False
+    can_swap_sides: bool = False
+    swap_sides: bool = False
+    main_axis_visible: bool = True
+
+
+@dataclass
+class SharedPlotSettings:
+    figure_width: float = 6.0
+    figure_height: float = 2.8
+    use_plot_area_size: bool = False
+    plot_area_width: float = 5.0
+    plot_area_height: float = 3.0
+    auto_padding: bool = True
+    padding_left: float = 0.8
+    padding_right: float = 0.3
+    padding_bottom: float = 0.7
+    padding_top: float = 0.3
+    show_legend: bool = True
+    show_legend_frame: bool = True
+    legend_loc: str = "best"
+    legend_use_coordinates: bool = False
+    legend_x: float = 1.0
+    legend_y: float = 1.0
+    show_grid: bool = True
+    title: str = ""
+    x_label: str = ""
+    y_label: str = ""
+    font_family: str = "Arial"
+    label_font_size: float = 10.0
+    legend_font_size: float = 10.0
+    tick_font_size: float = 10.0
+    show_annotation: bool = True
+    marker_size: float = 5.0
+    line_width: float = 1.2
+    x_min: Optional[float] = None
+    x_max: Optional[float] = None
+    y_min: Optional[float] = None
+    y_max: Optional[float] = None
+    x_log: bool = False
+    y_log: bool = False
+    digit_count: int = -1
+    x_digit_count: int = -1
+    y_digit_count: int = -1
+    x_scientific: bool = False
+    y_scientific: bool = False
+    x_tick_count: int = 0
+    y_tick_count: int = 0
+    x_ticks_text: str = ""
+    y_ticks_text: str = ""
+    x_opposite_ticks: bool = False
+    y_opposite_ticks: bool = False
+    y_normalize: bool = False
+    y_normalize_expr: str = ""
+    colormap: str = "viridis"
+    series: Dict[str, SeriesPlotSettings] = field(default_factory=dict)
+    series_order: List[str] = field(default_factory=list)
+    extra_axes: Dict[str, ExtraAxisPlotSettings] = field(default_factory=dict)
+    manual_items: Dict[str, ManualPlotItemSettings] = field(default_factory=dict)
+    annotations: Dict[str, AnnotationTextSettings] = field(default_factory=dict)
+
+
+class ManualPlotItemDialog(QDialog):
+    KIND_LABELS = {
+        "point": "Point (x, y)",
+        "vline": "Vertical line (x)",
+        "hline": "Horizontal line (y)",
+        "line": "Line segment (x1, y1, x2, y2)",
+    }
+
+    def __init__(
+        self,
+        item: ManualPlotItemSettings,
+        series: SeriesPlotSettings,
+        *,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Manual Data")
+        self.item = ManualPlotItemSettings(**item.__dict__)
+        self.series = SeriesPlotSettings(**series.__dict__)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name_edit = QLineEdit(self.series.label)
+        self.legend_edit = QLineEdit(self.series.legend_label or self.series.label)
+        self.kind_combo = QComboBox()
+        for key, label in self.KIND_LABELS.items():
+            self.kind_combo.addItem(label, key)
+        index = self.kind_combo.findData(self.item.kind)
+        self.kind_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.values_edit = QLineEdit(self.item.values)
+        self.values_hint = QLabel()
+        self.values_hint.setStyleSheet("color: gray;")
+        self.kind_combo.currentIndexChanged.connect(self._update_hint)
+        form.addRow("Data name", self.name_edit)
+        form.addRow("Legend label", self.legend_edit)
+        form.addRow("Type", self.kind_combo)
+        form.addRow("Values", self.values_edit)
+        form.addRow("", self.values_hint)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._update_hint()
+
+    def _update_hint(self) -> None:
+        kind = str(self.kind_combo.currentData() or "point")
+        hints = {
+            "point": "Example: 0, 12.5",
+            "vline": "Example: 0",
+            "hline": "Example: 12.5",
+            "line": "Example: 0, 1, 10, 3",
+        }
+        self.values_hint.setText(hints.get(kind, "Comma-separated numbers"))
+
+    def accept(self) -> None:
+        self.item.kind = str(self.kind_combo.currentData() or "point")
+        self.item.values = self.values_edit.text().strip()
+        self.series.label = self.name_edit.text().strip() or self.series.label
+        self.series.legend_label = self.legend_edit.text().strip()
+        super().accept()
+
+
+class PlotSettingsDialog(QDialog):
+    applied = pyqtSignal()
+
+    STYLE_OPTIONS = ["*", "*-", "^", "s", ".", "-", "--", ":", "x", "o"]
+    COLOR_OPTIONS = [
+        ("Blue", "C0"),
+        ("Orange", "C1"),
+        ("Green", "C2"),
+        ("Red", "C3"),
+        ("Purple", "C4"),
+        ("Brown", "C5"),
+        ("Gray", "0.3"),
+        ("Black", "black"),
+        ("White", "white"),
+    ]
+    LEGEND_LOC_OPTIONS = [
+        "best",
+        "upper right",
+        "upper left",
+        "lower left",
+        "lower right",
+        "right",
+        "center left",
+        "center right",
+        "lower center",
+        "upper center",
+        "center",
+    ]
+
+    def __init__(
+        self,
+        settings: SharedPlotSettings,
+        series_defaults: List[SeriesPlotSettings],
+        *,
+        title: str = "Plot Settings",
+        heatmap: bool = False,
+        extra_axis_defaults: Optional[List[ExtraAxisPlotSettings]] = None,
+        annotation_defaults: Optional[List[AnnotationTextSettings]] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(760, 560)
+        self.settings = settings
+        self.series_defaults = series_defaults
+        self.heatmap = heatmap
+        self.extra_axis_defaults = extra_axis_defaults or []
+        self.annotation_defaults = annotation_defaults or []
+        self._ensure_series()
+        self._ensure_extra_axes()
+        self._ensure_annotations()
+        self._accepted_snapshot = copy.deepcopy(self.settings)
+
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+        tabs.addTab(self._build_general_tab(), "General")
+        tabs.addTab(self._build_text_tab(), "Text")
+        tabs.addTab(self._build_data_tab(), "Data")
+        tabs.addTab(self._build_axis_tab(), "Axis")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Apply
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        if apply_button is not None:
+            apply_button.clicked.connect(self.apply)
+        layout.addWidget(buttons)
+
+    def _ensure_series(self) -> None:
+        for item in self.series_defaults:
+            self.settings.series.setdefault(item.label, SeriesPlotSettings(**item.__dict__))
+        for key in self.settings.manual_items:
+            self.settings.series.setdefault(key, SeriesPlotSettings(key))
+        known = {item.label for item in self.series_defaults}
+        known.update(self.settings.manual_items)
+        self.settings.series = {
+            label: value for label, value in self.settings.series.items() if label in known
+        }
+        if not self.settings.series_order:
+            self.settings.series_order = [item.label for item in self.series_defaults]
+        self.settings.series_order = [
+            label for label in self.settings.series_order if label in self.settings.series
+        ]
+        for item in self.series_defaults:
+            if item.label not in self.settings.series_order:
+                self.settings.series_order.append(item.label)
+        for key in self.settings.manual_items:
+            if key not in self.settings.series_order:
+                self.settings.series_order.append(key)
+
+    def _ensure_extra_axes(self) -> None:
+        for item in self.extra_axis_defaults:
+            self.settings.extra_axes.setdefault(item.key, ExtraAxisPlotSettings(**item.__dict__))
+        known = {item.key for item in self.extra_axis_defaults}
+        self.settings.extra_axes = {
+            key: value for key, value in self.settings.extra_axes.items() if key in known
+        }
+
+    def _ensure_annotations(self) -> None:
+        for item in self.annotation_defaults:
+            self.settings.annotations.setdefault(item.key, AnnotationTextSettings(**item.__dict__))
+        known = {item.key for item in self.annotation_defaults}
+        self.settings.annotations = {
+            key: value for key, value in self.settings.annotations.items() if key in known
+        }
+
+    def _build_general_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        self.figure_size_mode = QRadioButton("Figure size")
+        self.plot_area_size_mode = QRadioButton("Plot area size")
+        self.size_mode_group = QButtonGroup(self)
+        self.size_mode_group.addButton(self.figure_size_mode)
+        self.size_mode_group.addButton(self.plot_area_size_mode)
+        self.plot_area_size_mode.setChecked(self.settings.use_plot_area_size)
+        self.figure_size_mode.setChecked(not self.settings.use_plot_area_size)
+        self.figure_width = QDoubleSpinBox()
+        self.figure_width.setRange(2.0, 24.0)
+        self.figure_width.setSingleStep(0.2)
+        self.figure_width.setValue(self.settings.figure_width)
+        self.figure_height = QDoubleSpinBox()
+        self.figure_height.setRange(1.5, 18.0)
+        self.figure_height.setSingleStep(0.2)
+        self.figure_height.setValue(self.settings.figure_height)
+        self.plot_area_width = QDoubleSpinBox()
+        self.plot_area_width.setRange(1.0, 24.0)
+        self.plot_area_width.setSingleStep(0.2)
+        self.plot_area_width.setValue(self.settings.plot_area_width)
+        self.plot_area_height = QDoubleSpinBox()
+        self.plot_area_height.setRange(1.0, 18.0)
+        self.plot_area_height.setSingleStep(0.2)
+        self.plot_area_height.setValue(self.settings.plot_area_height)
+
+        figure_size_row = QWidget()
+        figure_size_layout = QHBoxLayout(figure_size_row)
+        figure_size_layout.setContentsMargins(0, 0, 0, 0)
+        figure_size_layout.addWidget(self.figure_size_mode)
+        figure_size_layout.addWidget(QLabel("Width"))
+        figure_size_layout.addWidget(self.figure_width)
+        figure_size_layout.addWidget(QLabel("Height"))
+        figure_size_layout.addWidget(self.figure_height)
+        figure_size_layout.addStretch(1)
+
+        plot_area_size_row = QWidget()
+        plot_area_size_layout = QHBoxLayout(plot_area_size_row)
+        plot_area_size_layout.setContentsMargins(0, 0, 0, 0)
+        plot_area_size_layout.addWidget(self.plot_area_size_mode)
+        plot_area_size_layout.addWidget(QLabel("Width"))
+        plot_area_size_layout.addWidget(self.plot_area_width)
+        plot_area_size_layout.addWidget(QLabel("Height"))
+        plot_area_size_layout.addWidget(self.plot_area_height)
+        plot_area_size_layout.addStretch(1)
+
+        self.auto_padding = QCheckBox("Auto padding")
+        self.auto_padding.setChecked(self.settings.auto_padding)
+        self.padding_left = self._padding_spin(self.settings.padding_left)
+        self.padding_right = self._padding_spin(self.settings.padding_right)
+        self.padding_bottom = self._padding_spin(self.settings.padding_bottom)
+        self.padding_top = self._padding_spin(self.settings.padding_top)
+        padding_row = QWidget()
+        padding_layout = QHBoxLayout(padding_row)
+        padding_layout.setContentsMargins(0, 0, 0, 0)
+        padding_layout.addWidget(self.auto_padding)
+        for label, widget in (
+            ("Left", self.padding_left),
+            ("Right", self.padding_right),
+            ("Bottom", self.padding_bottom),
+            ("Top", self.padding_top),
+        ):
+            padding_layout.addWidget(QLabel(label))
+            padding_layout.addWidget(widget)
+        padding_layout.addStretch(1)
+
+        self.figure_size_mode.toggled.connect(self._update_size_mode_controls)
+        self.plot_area_size_mode.toggled.connect(self._update_size_mode_controls)
+        self.auto_padding.toggled.connect(self._update_size_mode_controls)
+        self.legend = QCheckBox()
+        self.legend.setChecked(self.settings.show_legend)
+        self.grid = QCheckBox()
+        self.grid.setChecked(self.settings.show_grid)
+        form.addRow(figure_size_row)
+        form.addRow(plot_area_size_row)
+        form.addRow("Outer padding (inch)", padding_row)
+        form.addRow("Legend", self.legend)
+        form.addRow("Grid", self.grid)
+        self._update_size_mode_controls()
+        return page
+
+    def _padding_spin(self, value: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 10.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.05)
+        spin.setSuffix(" in")
+        spin.setValue(value)
+        return spin
+
+    def _update_size_mode_controls(self) -> None:
+        use_plot_area = self.plot_area_size_mode.isChecked()
+        self.figure_width.setEnabled(not use_plot_area)
+        self.figure_height.setEnabled(not use_plot_area)
+        self.plot_area_width.setEnabled(use_plot_area)
+        self.plot_area_height.setEnabled(use_plot_area)
+        self.auto_padding.setEnabled(use_plot_area)
+        manual_padding = use_plot_area and not self.auto_padding.isChecked()
+        for spin in (self.padding_left, self.padding_right, self.padding_bottom, self.padding_top):
+            spin.setEnabled(manual_padding)
+
+    def _build_text_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        self.title_edit = QLineEdit(self.settings.title)
+        self.font_family = QComboBox()
+        for font_name in ["Arial", "DejaVu Sans", "Times New Roman", "Calibri", "Cambria"]:
+            self.font_family.addItem(font_name)
+        self.font_family.setEditable(True)
+        index = self.font_family.findText(self.settings.font_family)
+        self.font_family.setCurrentIndex(index if index >= 0 else 0)
+        self.label_size = self._font_spin(self.settings.label_font_size)
+        self.legend_size = self._font_spin(self.settings.legend_font_size)
+        self.tick_size = self._font_spin(self.settings.tick_font_size)
+        self.legend_frame = QCheckBox()
+        self.legend_frame.setChecked(self.settings.show_legend_frame)
+        self.legend_loc = QComboBox()
+        self.legend_loc.addItems(self.LEGEND_LOC_OPTIONS)
+        loc_index = self.legend_loc.findText(self.settings.legend_loc)
+        self.legend_loc.setCurrentIndex(loc_index if loc_index >= 0 else 0)
+        self.legend_use_coordinates = QCheckBox("Use axes coordinates")
+        self.legend_use_coordinates.setChecked(self.settings.legend_use_coordinates)
+        self.legend_x = QDoubleSpinBox()
+        self.legend_x.setRange(-5.0, 5.0)
+        self.legend_x.setDecimals(3)
+        self.legend_x.setSingleStep(0.02)
+        self.legend_x.setValue(self.settings.legend_x)
+        self.legend_y = QDoubleSpinBox()
+        self.legend_y.setRange(-5.0, 5.0)
+        self.legend_y.setDecimals(3)
+        self.legend_y.setSingleStep(0.02)
+        self.legend_y.setValue(self.settings.legend_y)
+        self.legend_x.setEnabled(self.settings.legend_use_coordinates)
+        self.legend_y.setEnabled(self.settings.legend_use_coordinates)
+        self.legend_use_coordinates.toggled.connect(self.legend_x.setEnabled)
+        self.legend_use_coordinates.toggled.connect(self.legend_y.setEnabled)
+        legend_coordinates = QWidget()
+        legend_coordinates_layout = QHBoxLayout(legend_coordinates)
+        legend_coordinates_layout.setContentsMargins(0, 0, 0, 0)
+        legend_coordinates_layout.addWidget(self.legend_use_coordinates)
+        legend_coordinates_layout.addWidget(QLabel("X"))
+        legend_coordinates_layout.addWidget(self.legend_x)
+        legend_coordinates_layout.addWidget(QLabel("Y"))
+        legend_coordinates_layout.addWidget(self.legend_y)
+        legend_coordinates_layout.addStretch(1)
+        self.annotation = QCheckBox()
+        self.annotation.setChecked(self.settings.show_annotation)
+        form.addRow("Title", self.title_edit)
+        form.addRow("Font", self.font_family)
+        form.addRow("Label size", self.label_size)
+        form.addRow("Legend size", self.legend_size)
+        form.addRow("Legend frame", self.legend_frame)
+        form.addRow("Legend position", self.legend_loc)
+        form.addRow("Legend coordinates", legend_coordinates)
+        form.addRow("Ticks size", self.tick_size)
+        form.addRow("Additional text", self.annotation)
+
+        self.annotation_widgets: Dict[str, Dict[str, object]] = {}
+        if self.annotation_defaults:
+            form.addRow(QLabel("Additional text templates"))
+        for annotation in self.annotation_defaults:
+            current = self.settings.annotations[annotation.key]
+            group = QGroupBox(current.name)
+            group_layout = QGridLayout(group)
+            enabled = QCheckBox("Show")
+            enabled.setChecked(current.visible)
+            digits = QSpinBox()
+            digits.setRange(-1, 12)
+            digits.setSpecialValueText("Auto")
+            digits.setValue(current.digit_count)
+            x_pos = QDoubleSpinBox()
+            x_pos.setRange(-5.0, 5.0)
+            x_pos.setDecimals(3)
+            x_pos.setSingleStep(0.02)
+            x_pos.setValue(current.x)
+            y_pos = QDoubleSpinBox()
+            y_pos.setRange(-5.0, 5.0)
+            y_pos.setDecimals(3)
+            y_pos.setSingleStep(0.02)
+            y_pos.setValue(current.y)
+            ha = QComboBox()
+            ha.addItems(["left", "center", "right"])
+            ha_index = ha.findText(current.ha)
+            ha.setCurrentIndex(ha_index if ha_index >= 0 else 0)
+            va = QComboBox()
+            va.addItems(["top", "center", "bottom", "baseline"])
+            va_index = va.findText(current.va)
+            va.setCurrentIndex(va_index if va_index >= 0 else 0)
+            text_edit = QPlainTextEdit(current.text)
+            text_edit.setPlaceholderText("Use placeholders such as {value:.2f}")
+            text_edit.setFixedHeight(90)
+            reset_button = QPushButton("Reset")
+            reset_button.clicked.connect(lambda _checked=False, key=annotation.key: self._reset_annotation_widgets(key))
+            group_layout.addWidget(enabled, 0, 0)
+            group_layout.addWidget(QLabel("Digits"), 0, 1)
+            group_layout.addWidget(digits, 0, 2)
+            group_layout.addWidget(reset_button, 0, 3)
+            group_layout.addWidget(QLabel("X"), 1, 0)
+            group_layout.addWidget(x_pos, 1, 1)
+            group_layout.addWidget(QLabel("Y"), 1, 2)
+            group_layout.addWidget(y_pos, 1, 3)
+            group_layout.addWidget(QLabel("H align"), 2, 0)
+            group_layout.addWidget(ha, 2, 1)
+            group_layout.addWidget(QLabel("V align"), 2, 2)
+            group_layout.addWidget(va, 2, 3)
+            group_layout.addWidget(text_edit, 3, 0, 1, 4)
+            group_layout.setColumnStretch(3, 1)
+            form.addRow(group)
+            self.annotation_widgets[annotation.key] = {
+                "enabled": enabled,
+                "digits": digits,
+                "x": x_pos,
+                "y": y_pos,
+                "ha": ha,
+                "va": va,
+                "text": text_edit,
+            }
+
+        self.extra_axis_text_widgets: Dict[str, Dict[str, object]] = {}
+        form.addRow(QLabel("Axis labels"))
+        self.x_label_edit = QLineEdit(self.settings.x_label)
+        self.y_label_edit = QLineEdit(self.settings.y_label)
+        form.addRow("X axis", self.x_label_edit)
+        form.addRow("Y axis", self.y_label_edit)
+        if self.extra_axis_defaults:
+            form.addRow(QLabel("Extra axis labels"))
+        for axis in self.extra_axis_defaults:
+            current = self.settings.extra_axes[axis.key]
+            enabled = QCheckBox(current.name)
+            enabled.setChecked(current.visible)
+            label = QLineEdit(current.label)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(enabled)
+            row_layout.addWidget(QLabel("Label"))
+            row_layout.addWidget(label, 1)
+            form.addRow(row)
+            self.extra_axis_text_widgets[axis.key] = {
+                "enabled": enabled,
+                "label": label,
+            }
+        return page
+
+    def _reset_annotation_widgets(self, key: str) -> None:
+        defaults = {item.key: item for item in self.annotation_defaults}
+        default = defaults.get(key)
+        widgets = self.annotation_widgets.get(key)
+        if default is None or widgets is None:
+            return
+        enabled = widgets["enabled"]
+        digits = widgets["digits"]
+        x_pos = widgets["x"]
+        y_pos = widgets["y"]
+        ha = widgets["ha"]
+        va = widgets["va"]
+        text = widgets["text"]
+        if isinstance(enabled, QCheckBox):
+            enabled.setChecked(default.visible)
+        if isinstance(digits, QSpinBox):
+            digits.setValue(default.digit_count)
+        if isinstance(x_pos, QDoubleSpinBox):
+            x_pos.setValue(default.x)
+        if isinstance(y_pos, QDoubleSpinBox):
+            y_pos.setValue(default.y)
+        if isinstance(ha, QComboBox):
+            index = ha.findText(default.ha)
+            ha.setCurrentIndex(index if index >= 0 else 0)
+        if isinstance(va, QComboBox):
+            index = va.findText(default.va)
+            va.setCurrentIndex(index if index >= 0 else 0)
+        if isinstance(text, QPlainTextEdit):
+            text.setPlainText(default.text)
+
+    def _font_spin(self, value: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(5.0, 48.0)
+        spin.setDecimals(1)
+        spin.setSingleStep(0.5)
+        spin.setValue(value)
+        return spin
+
+    def _build_data_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        if self.heatmap:
+            cmap_row = QHBoxLayout()
+            cmap_row.addWidget(QLabel("Colormap"))
+            self.colormap = QComboBox()
+            for cmap in ["viridis", "plasma", "inferno", "magma", "cividis", "turbo", "coolwarm", "Spectral"]:
+                self.colormap.addItem(cmap)
+            index = self.colormap.findText(self.settings.colormap)
+            self.colormap.setCurrentIndex(index if index >= 0 else 0)
+            cmap_row.addWidget(self.colormap)
+            cmap_row.addStretch(1)
+            layout.addLayout(cmap_row)
+        else:
+            self.colormap = QComboBox()
+
+        self.series_table = QTableWidget(len(self.settings.series_order), 8)
+        self.series_table.setHorizontalHeaderLabels(
+            ["Data", "Legend label", "Digits", "Y offset", "Color", "Style", "Show", "Legend"]
+        )
+        self.series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.series_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.series_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.series_table.customContextMenuRequested.connect(self._show_series_context_menu)
+        text_delegate = OpaqueLineEditDelegate(self.series_table)
+        self.series_table.setItemDelegateForColumn(0, text_delegate)
+        self.series_table.setItemDelegateForColumn(1, text_delegate)
+        for row, label in enumerate(self.settings.series_order):
+            self._populate_series_row(row, label)
+        layout.addWidget(self.series_table)
+
+        order_row = QHBoxLayout()
+        add_button = QPushButton("Add Data")
+        up_button = QPushButton("Up")
+        down_button = QPushButton("Down")
+        add_button.clicked.connect(self._add_manual_data)
+        up_button.clicked.connect(lambda: self._move_selected_row(-1))
+        down_button.clicked.connect(lambda: self._move_selected_row(1))
+        order_row.addWidget(add_button)
+        order_row.addStretch(1)
+        order_row.addWidget(up_button)
+        order_row.addWidget(down_button)
+        layout.addLayout(order_row)
+
+        numeric_row = QHBoxLayout()
+        numeric_row.addWidget(QLabel("Mark size"))
+        self.marker_size = QDoubleSpinBox()
+        self.marker_size.setRange(0.0, 40.0)
+        self.marker_size.setSingleStep(0.5)
+        self.marker_size.setValue(self.settings.marker_size)
+        numeric_row.addWidget(self.marker_size)
+        numeric_row.addWidget(QLabel("Line width"))
+        self.line_width = QDoubleSpinBox()
+        self.line_width.setRange(0.0, 20.0)
+        self.line_width.setSingleStep(0.2)
+        self.line_width.setValue(self.settings.line_width)
+        numeric_row.addWidget(self.line_width)
+        numeric_row.addStretch(1)
+        layout.addLayout(numeric_row)
+        return page
+
+    def _populate_series_row(self, row: int, label: str) -> None:
+        series = self.settings.series[label]
+        label_item = QTableWidgetItem(series.label)
+        label_item.setData(Qt.ItemDataRole.UserRole, label)
+        self.series_table.setItem(row, 0, label_item)
+
+        legend_item = QTableWidgetItem(series.legend_label or series.label)
+        self.series_table.setItem(row, 1, legend_item)
+
+        digits = QSpinBox()
+        digits.setRange(-1, 12)
+        digits.setSpecialValueText("Auto")
+        digits.setValue(series.legend_digits)
+        self.series_table.setCellWidget(row, 2, digits)
+
+        y_offset = QDoubleSpinBox()
+        y_offset.setRange(-1e12, 1e12)
+        y_offset.setDecimals(8)
+        y_offset.setSingleStep(0.1)
+        y_offset.setValue(series.y_offset)
+        self.series_table.setCellWidget(row, 3, y_offset)
+
+        color_button = QPushButton(series.color)
+        color_button.clicked.connect(lambda _checked=False, r=row: self._choose_color(r))
+        self._paint_color_button(color_button, series.color)
+        self.series_table.setCellWidget(row, 4, color_button)
+
+        style = QComboBox()
+        style.addItems(self.STYLE_OPTIONS)
+        style.setCurrentText(series.style if series.style in self.STYLE_OPTIONS else "*")
+        self.series_table.setCellWidget(row, 5, style)
+
+        show = QCheckBox()
+        show.setChecked(series.visible)
+        self.series_table.setCellWidget(row, 6, show)
+
+        legend = QCheckBox()
+        legend.setChecked(series.legend_visible)
+        self.series_table.setCellWidget(row, 7, legend)
+
+    def _paint_color_button(self, button: QPushButton, color: str) -> None:
+        button.setText(color)
+        if color.startswith("C") or color.startswith("0."):
+            button.setStyleSheet("")
+            return
+        button.setStyleSheet(f"background-color: {QColor(color).name()};")
+
+    def _choose_color(self, row: int) -> None:
+        button = self.series_table.cellWidget(row, 4)
+        if not isinstance(button, QPushButton):
+            return
+        current = button.text() or "black"
+        initial = QColor(current) if not current.startswith("C") else QColor("black")
+        color = QColorDialog.getColor(initial, self, "Choose curve color")
+        if not color.isValid():
+            return
+        self._paint_color_button(button, color.name())
+
+    def _move_selected_row(self, delta: int) -> None:
+        row = self.series_table.currentRow()
+        target = row + delta
+        if row < 0 or target < 0 or target >= self.series_table.rowCount():
+            return
+        self._read_series_table()
+        labels = list(self.settings.series_order)
+        labels[row], labels[target] = labels[target], labels[row]
+        self.settings.series_order = labels
+        self._rebuild_series_table()
+        self.series_table.selectRow(target)
+
+    def _rebuild_series_table(self) -> None:
+        self.series_table.setRowCount(len(self.settings.series_order))
+        for row, label in enumerate(self.settings.series_order):
+            self._populate_series_row(row, label)
+
+    def _new_manual_key(self) -> str:
+        index = 1
+        while f"manual:{index}" in self.settings.manual_items:
+            index += 1
+        return f"manual:{index}"
+
+    def _add_manual_data(self) -> None:
+        self._read_series_table()
+        key = self._new_manual_key()
+        item = ManualPlotItemSettings(key=key, kind="point", values="")
+        series = SeriesPlotSettings(
+            label=f"Manual {len(self.settings.manual_items) + 1}",
+            color="black",
+            style="o",
+        )
+        dialog = ManualPlotItemDialog(item, series, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings.manual_items[key] = dialog.item
+        self.settings.series[key] = dialog.series
+        self.settings.series_order.append(key)
+        self._rebuild_series_table()
+        self.series_table.selectRow(self.settings.series_order.index(key))
+
+    def _show_series_context_menu(self, position) -> None:
+        row = self.series_table.rowAt(position.y())
+        if row < 0:
+            return
+        item = self.series_table.item(row, 0)
+        if item is None:
+            return
+        key = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if key not in self.settings.manual_items:
+            return
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit values")
+        delete_action = menu.addAction("Delete")
+        action = menu.exec(self.series_table.viewport().mapToGlobal(position))
+        if action == edit_action:
+            self._edit_manual_data(key)
+        elif action == delete_action:
+            self._delete_manual_data(key)
+
+    def _edit_manual_data(self, key: str) -> None:
+        self._read_series_table()
+        item = self.settings.manual_items.get(key)
+        series = self.settings.series.get(key)
+        if item is None or series is None:
+            return
+        dialog = ManualPlotItemDialog(item, series, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings.manual_items[key] = dialog.item
+        self.settings.series[key] = dialog.series
+        self._rebuild_series_table()
+        if key in self.settings.series_order:
+            self.series_table.selectRow(self.settings.series_order.index(key))
+
+    def _delete_manual_data(self, key: str) -> None:
+        self._read_series_table()
+        self.settings.manual_items.pop(key, None)
+        self.settings.series.pop(key, None)
+        self.settings.series_order = [item for item in self.settings.series_order if item != key]
+        self._rebuild_series_table()
+
+    def _build_axis_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.x_axis_widgets = self._make_axis_group(
+            "X axis",
+            axis_min=self.settings.x_min,
+            axis_max=self.settings.x_max,
+            log_scale=self.settings.x_log,
+            digit_count=self.settings.x_digit_count,
+            scientific=self.settings.x_scientific,
+            tick_count=self.settings.x_tick_count,
+            ticks_text=self.settings.x_ticks_text,
+            opposite_ticks=self.settings.x_opposite_ticks,
+        )
+        self.y_axis_widgets = self._make_axis_group(
+            "Y axis",
+            axis_min=self.settings.y_min,
+            axis_max=self.settings.y_max,
+            log_scale=self.settings.y_log,
+            digit_count=self.settings.y_digit_count,
+            scientific=self.settings.y_scientific,
+            tick_count=self.settings.y_tick_count,
+            ticks_text=self.settings.y_ticks_text,
+            opposite_ticks=self.settings.y_opposite_ticks,
+        )
+        layout.addWidget(self.x_axis_widgets["group"])
+        layout.addWidget(self.y_axis_widgets["group"])
+        self.y_normalize_widgets = self._make_y_normalize_group()
+        layout.addWidget(self.y_normalize_widgets["group"])
+        self.extra_axis_axis_widgets: Dict[str, Dict[str, object]] = {}
+        for axis in self.extra_axis_defaults:
+            current = self.settings.extra_axes[axis.key]
+            widgets = self._make_axis_group(
+                current.name,
+                axis_min=current.axis_min,
+                axis_max=current.axis_max,
+                log_scale=current.log_scale,
+                digit_count=current.digit_count,
+                scientific=current.scientific,
+                tick_count=current.tick_count,
+                ticks_text=current.ticks_text,
+                opposite_ticks=current.opposite_ticks,
+                visible=current.visible,
+                can_swap_sides=current.can_swap_sides,
+                swap_sides=current.swap_sides,
+                main_axis_visible=current.main_axis_visible,
+            )
+            text_enabled = self.extra_axis_text_widgets.get(axis.key, {}).get("enabled")
+            axis_enabled = widgets.get("visible")
+            if isinstance(text_enabled, QCheckBox) and isinstance(axis_enabled, QCheckBox):
+                text_enabled.toggled.connect(axis_enabled.setChecked)
+                axis_enabled.toggled.connect(text_enabled.setChecked)
+            self.extra_axis_axis_widgets[axis.key] = widgets
+            layout.addWidget(widgets["group"])
+        layout.addStretch(1)
+        return page
+
+    def _make_y_normalize_group(self) -> Dict[str, object]:
+        group = QGroupBox("Y normalization")
+        layout = QGridLayout(group)
+        enabled = QCheckBox("Normalize y values")
+        enabled.setChecked(self.settings.y_normalize)
+        expr = QLineEdit(self.settings.y_normalize_expr)
+        expr.setPlaceholderText("number or expression, e.g. 1e-6, max, mean, np.max(y)")
+        hint = QLabel("Available names: y, max, min, mean, median, std, absmax, rms, ptp, np")
+        hint.setStyleSheet("color: gray;")
+        layout.addWidget(enabled, 0, 0)
+        layout.addWidget(QLabel("Divide by"), 0, 1)
+        layout.addWidget(expr, 0, 2)
+        layout.addWidget(hint, 1, 0, 1, 3)
+        layout.setColumnStretch(2, 1)
+        return {
+            "group": group,
+            "enabled": enabled,
+            "expr": expr,
+        }
+
+    def _make_axis_group(
+        self,
+        title: str,
+        *,
+        axis_min: Optional[float],
+        axis_max: Optional[float],
+        log_scale: bool,
+        digit_count: int,
+        scientific: bool,
+        tick_count: int,
+        ticks_text: str,
+        opposite_ticks: bool,
+        visible: Optional[bool] = None,
+        can_swap_sides: bool = False,
+        swap_sides: bool = False,
+        main_axis_visible: bool = True,
+    ) -> Dict[str, object]:
+        group = QGroupBox(title)
+        layout = QGridLayout(group)
+        min_edit = QLineEdit(self._format_bound(axis_min))
+        max_edit = QLineEdit(self._format_bound(axis_max))
+        log_box = QCheckBox("log")
+        log_box.setChecked(log_scale)
+        digits = QSpinBox()
+        digits.setRange(-1, 12)
+        digits.setSpecialValueText("Auto")
+        digits.setValue(digit_count)
+        scientific_box = QCheckBox("scientific")
+        scientific_box.setChecked(scientific)
+        tick_count_box = QSpinBox()
+        tick_count_box.setRange(0, 30)
+        tick_count_box.setSpecialValueText("Auto")
+        tick_count_box.setValue(tick_count)
+        opposite_box = QCheckBox("opposite ticks")
+        opposite_box.setChecked(opposite_ticks)
+        ticks_edit = QLineEdit(ticks_text)
+        ticks_edit.setPlaceholderText("optional: 0, 1, 2")
+
+        visible_box = QCheckBox("Show secondary axis")
+        if visible is not None:
+            visible_box.setChecked(visible)
+        swap_box = QCheckBox("Swap with main axis")
+        swap_box.setChecked(swap_sides)
+        main_visible_box = QCheckBox("Show main axis")
+        main_visible_box.setChecked(main_axis_visible)
+
+        layout.addWidget(QLabel("Range"), 0, 0)
+        layout.addWidget(min_edit, 0, 1)
+        layout.addWidget(QLabel("-"), 0, 2)
+        layout.addWidget(max_edit, 0, 3)
+        layout.addWidget(log_box, 0, 4)
+        layout.addWidget(QLabel("Digits"), 1, 0)
+        layout.addWidget(digits, 1, 1)
+        layout.addWidget(scientific_box, 1, 2, 1, 2)
+        layout.addWidget(QLabel("Ticks count"), 2, 0)
+        layout.addWidget(tick_count_box, 2, 1)
+        layout.addWidget(opposite_box, 2, 2, 1, 2)
+        layout.addWidget(QLabel("Ticks list"), 3, 0)
+        layout.addWidget(ticks_edit, 3, 1, 1, 4)
+        if visible is not None:
+            layout.addWidget(visible_box, 4, 0, 1, 2)
+        if can_swap_sides:
+            layout.addWidget(swap_box, 4, 2, 1, 3)
+            layout.addWidget(main_visible_box, 5, 0, 1, 2)
+        layout.setColumnStretch(3, 1)
+        return {
+            "group": group,
+            "min": min_edit,
+            "max": max_edit,
+            "log": log_box,
+            "digits": digits,
+            "scientific": scientific_box,
+            "tick_count": tick_count_box,
+            "opposite_ticks": opposite_box,
+            "ticks_text": ticks_edit,
+            "visible": visible_box if visible is not None else None,
+            "swap_sides": swap_box if can_swap_sides else None,
+            "main_axis_visible": main_visible_box if can_swap_sides else None,
+        }
+
+    def _format_bound(self, value: Optional[float]) -> str:
+        return "" if value is None else f"{value:g}"
+
+    def _parse_bound(self, text: str) -> Optional[float]:
+        stripped = text.strip()
+        return None if not stripped else float(stripped)
+
+    def _read_series_table(self) -> None:
+        order: List[str] = []
+        for row in range(self.series_table.rowCount()):
+            item = self.series_table.item(row, 0)
+            if item is None:
+                continue
+            key = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+            data_label = item.text().strip() or key
+            legend_item = self.series_table.item(row, 1)
+            legend_label = legend_item.text().strip() if legend_item is not None else data_label
+            order.append(key)
+            digits_box = self.series_table.cellWidget(row, 2)
+            y_offset_box = self.series_table.cellWidget(row, 3)
+            color_button = self.series_table.cellWidget(row, 4)
+            style_combo = self.series_table.cellWidget(row, 5)
+            show_box = self.series_table.cellWidget(row, 6)
+            legend_box = self.series_table.cellWidget(row, 7)
+            self.settings.series[key] = SeriesPlotSettings(
+                label=data_label,
+                color=color_button.text() if isinstance(color_button, QPushButton) else "C0",
+                style=style_combo.currentText() if isinstance(style_combo, QComboBox) else "*",
+                visible=show_box.isChecked() if isinstance(show_box, QCheckBox) else True,
+                legend_visible=legend_box.isChecked() if isinstance(legend_box, QCheckBox) else True,
+                legend_label=legend_label,
+                legend_digits=int(digits_box.value()) if isinstance(digits_box, QSpinBox) else -1,
+                y_offset=float(y_offset_box.value()) if isinstance(y_offset_box, QDoubleSpinBox) else 0.0,
+            )
+        self.settings.series_order = order
+
+    def _read_form(self) -> bool:
+        try:
+            self._read_series_table()
+            self.settings.figure_width = float(self.figure_width.value())
+            self.settings.figure_height = float(self.figure_height.value())
+            self.settings.use_plot_area_size = self.plot_area_size_mode.isChecked()
+            self.settings.plot_area_width = float(self.plot_area_width.value())
+            self.settings.plot_area_height = float(self.plot_area_height.value())
+            self.settings.auto_padding = self.auto_padding.isChecked()
+            self.settings.padding_left = float(self.padding_left.value())
+            self.settings.padding_right = float(self.padding_right.value())
+            self.settings.padding_bottom = float(self.padding_bottom.value())
+            self.settings.padding_top = float(self.padding_top.value())
+            self.settings.show_legend = self.legend.isChecked()
+            self.settings.show_grid = self.grid.isChecked()
+            self.settings.title = self.title_edit.text()
+            self.settings.x_label = self.x_label_edit.text()
+            self.settings.y_label = self.y_label_edit.text()
+            self.settings.font_family = self.font_family.currentText() or "Arial"
+            self.settings.label_font_size = float(self.label_size.value())
+            self.settings.legend_font_size = float(self.legend_size.value())
+            self.settings.show_legend_frame = self.legend_frame.isChecked()
+            self.settings.legend_loc = self.legend_loc.currentText() or "best"
+            self.settings.legend_use_coordinates = self.legend_use_coordinates.isChecked()
+            self.settings.legend_x = float(self.legend_x.value())
+            self.settings.legend_y = float(self.legend_y.value())
+            self.settings.tick_font_size = float(self.tick_size.value())
+            self.settings.show_annotation = self.annotation.isChecked()
+            self.settings.marker_size = float(self.marker_size.value())
+            self.settings.line_width = float(self.line_width.value())
+            self._read_main_axis_widgets()
+            if self.heatmap:
+                self.settings.colormap = self.colormap.currentText() or "viridis"
+            for key, widgets in self.extra_axis_text_widgets.items():
+                axis = self.settings.extra_axes[key]
+                enabled = widgets["enabled"]
+                label = widgets["label"]
+                axis.visible = enabled.isChecked() if isinstance(enabled, QCheckBox) else axis.visible
+                axis.label = label.text() if isinstance(label, QLineEdit) else axis.label
+                axis.label_font_size = self.settings.label_font_size
+                axis.tick_font_size = self.settings.tick_font_size
+            for key, widgets in self.annotation_widgets.items():
+                annotation = self.settings.annotations[key]
+                enabled = widgets["enabled"]
+                digits = widgets["digits"]
+                x_pos = widgets["x"]
+                y_pos = widgets["y"]
+                ha = widgets["ha"]
+                va = widgets["va"]
+                text = widgets["text"]
+                annotation.visible = enabled.isChecked() if isinstance(enabled, QCheckBox) else annotation.visible
+                annotation.digit_count = int(digits.value()) if isinstance(digits, QSpinBox) else annotation.digit_count
+                annotation.x = float(x_pos.value()) if isinstance(x_pos, QDoubleSpinBox) else annotation.x
+                annotation.y = float(y_pos.value()) if isinstance(y_pos, QDoubleSpinBox) else annotation.y
+                annotation.ha = ha.currentText() if isinstance(ha, QComboBox) else annotation.ha
+                annotation.va = va.currentText() if isinstance(va, QComboBox) else annotation.va
+                annotation.text = text.toPlainText() if isinstance(text, QPlainTextEdit) else annotation.text
+            for key, widgets in self.extra_axis_axis_widgets.items():
+                axis = self.settings.extra_axes[key]
+                self._read_extra_axis_widgets(axis, widgets)
+        except Exception as exc:
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, "Invalid setting", str(exc))
+            return False
+        return True
+
+    def _read_main_axis_widgets(self) -> None:
+        x_axis = self._read_axis_widgets(self.x_axis_widgets)
+        y_axis = self._read_axis_widgets(self.y_axis_widgets)
+        self.settings.x_min = x_axis["min"]
+        self.settings.x_max = x_axis["max"]
+        self.settings.x_log = x_axis["log"]
+        self.settings.x_digit_count = x_axis["digits"]
+        self.settings.x_scientific = x_axis["scientific"]
+        self.settings.x_tick_count = x_axis["tick_count"]
+        self.settings.x_ticks_text = x_axis["ticks_text"]
+        self.settings.x_opposite_ticks = x_axis["opposite_ticks"]
+        self.settings.y_min = y_axis["min"]
+        self.settings.y_max = y_axis["max"]
+        self.settings.y_log = y_axis["log"]
+        self.settings.y_digit_count = y_axis["digits"]
+        self.settings.y_scientific = y_axis["scientific"]
+        self.settings.y_tick_count = y_axis["tick_count"]
+        self.settings.y_ticks_text = y_axis["ticks_text"]
+        self.settings.y_opposite_ticks = y_axis["opposite_ticks"]
+        normalize_enabled = self.y_normalize_widgets["enabled"]
+        normalize_expr = self.y_normalize_widgets["expr"]
+        self.settings.y_normalize = (
+            normalize_enabled.isChecked()
+            if isinstance(normalize_enabled, QCheckBox)
+            else False
+        )
+        self.settings.y_normalize_expr = (
+            normalize_expr.text().strip()
+            if isinstance(normalize_expr, QLineEdit)
+            else ""
+        )
+        self.settings.digit_count = max(self.settings.x_digit_count, self.settings.y_digit_count)
+
+    def _read_extra_axis_widgets(self, axis: ExtraAxisPlotSettings, widgets: Dict[str, object]) -> None:
+        values = self._read_axis_widgets(widgets)
+        axis.axis_min = values["min"]
+        axis.axis_max = values["max"]
+        axis.log_scale = values["log"]
+        axis.digit_count = values["digits"]
+        axis.scientific = values["scientific"]
+        axis.tick_count = values["tick_count"]
+        axis.ticks_text = values["ticks_text"]
+        axis.opposite_ticks = values["opposite_ticks"]
+        visible = widgets.get("visible")
+        swap_sides = widgets.get("swap_sides")
+        main_axis_visible = widgets.get("main_axis_visible")
+        if isinstance(visible, QCheckBox):
+            axis.visible = visible.isChecked()
+        if isinstance(swap_sides, QCheckBox):
+            axis.swap_sides = swap_sides.isChecked()
+        if isinstance(main_axis_visible, QCheckBox):
+            axis.main_axis_visible = main_axis_visible.isChecked()
+
+    def _read_axis_widgets(self, widgets: Dict[str, object]) -> Dict[str, object]:
+        min_edit = widgets["min"]
+        max_edit = widgets["max"]
+        log_box = widgets["log"]
+        digits = widgets["digits"]
+        scientific = widgets["scientific"]
+        tick_count = widgets["tick_count"]
+        opposite_ticks = widgets["opposite_ticks"]
+        ticks_text = widgets["ticks_text"]
+        return {
+            "min": self._parse_bound(min_edit.text()) if isinstance(min_edit, QLineEdit) else None,
+            "max": self._parse_bound(max_edit.text()) if isinstance(max_edit, QLineEdit) else None,
+            "log": log_box.isChecked() if isinstance(log_box, QCheckBox) else False,
+            "digits": int(digits.value()) if isinstance(digits, QSpinBox) else 4,
+            "scientific": scientific.isChecked() if isinstance(scientific, QCheckBox) else False,
+            "tick_count": int(tick_count.value()) if isinstance(tick_count, QSpinBox) else 0,
+            "opposite_ticks": opposite_ticks.isChecked() if isinstance(opposite_ticks, QCheckBox) else False,
+            "ticks_text": ticks_text.text() if isinstance(ticks_text, QLineEdit) else "",
+        }
+
+    def apply(self) -> None:
+        if self._read_form():
+            self._accepted_snapshot = copy.deepcopy(self.settings)
+            self.applied.emit()
+
+    def accept(self) -> None:
+        if not self._read_form():
+            return
+        super().accept()
+
+    def reject(self) -> None:
+        self.settings.__dict__.clear()
+        self.settings.__dict__.update(copy.deepcopy(self._accepted_snapshot.__dict__))
+        super().reject()
